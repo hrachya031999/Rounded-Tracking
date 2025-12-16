@@ -2,114 +2,189 @@ import React, { useState, useEffect, useRef } from 'react';
 
 const App = () => {
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
-  const [constrainedPos, setConstrainedPos] = useState({ x: 0, y: 0 });
+  const [leftEyePos, setLeftEyePos] = useState({ x: 0, y: 0 });
+  const [rightEyePos, setRightEyePos] = useState({ x: 0, y: 0 });
   
   // Configuration
   const ROTATION_DEG = 20;
-  const RADIUS_X = 300; // Major axis
-  const RADIUS_Y = 150; // Minor axis
+  const EYE_RADIUS_X = 60;  // Width of the eye
+  const EYE_RADIUS_Y = 35;  // Height of the eye
+  const EYE_OFFSET = 100;   // Distance from center to each eye
   
-  // We need a ref for the container to calculate center relative to window size
   const containerRef = useRef(null);
+
+  // Helper function to calculate constrained position for a single eye
+  const getConstrainedPoint = (mouseX, mouseY, centerX, centerY, radX, radY, rotation) => {
+    // 1. Vector from specific eye center to mouse
+    const dx = mouseX - centerX;
+    const dy = mouseY - centerY;
+
+    // 2. Un-rotate (align with local ellipse axis)
+    const angleRad = (rotation * Math.PI) / 180;
+    const cos = Math.cos(-angleRad);
+    const sin = Math.sin(-angleRad);
+    
+    const localX = dx * cos - dy * sin;
+    const localY = dx * sin + dy * cos;
+
+    // 3. Ellipse Constraint Check
+    const equation = (localX * localX) / (radX * radX) + 
+                     (localY * localY) / (radY * radY);
+
+    let constrainedLocalX = localX;
+    let constrainedLocalY = localY;
+
+    if (equation > 1) {
+      const scale = 1 / Math.sqrt(equation);
+      constrainedLocalX = localX * scale;
+      constrainedLocalY = localY * scale;
+    }
+
+    // 4. Rotate back
+    const cosBack = Math.cos(angleRad);
+    const sinBack = Math.sin(angleRad);
+
+    const finalX = constrainedLocalX * cosBack - constrainedLocalY * sinBack;
+    const finalY = constrainedLocalX * sinBack + constrainedLocalY * cosBack;
+
+    return { x: centerX + finalX, y: centerY + finalY };
+  };
 
   useEffect(() => {
     const handleMouseMove = (e) => {
       if (!containerRef.current) return;
 
       const rect = containerRef.current.getBoundingClientRect();
-      const centerX = rect.width / 2;
-      const centerY = rect.height / 2;
+      const screenCenterX = rect.width / 2;
+      const screenCenterY = rect.height / 2;
 
-      // 1. Get raw mouse position relative to center
-      const rawX = e.clientX - rect.left - centerX;
-      const rawY = e.clientY - rect.top - centerY;
-
-      // 2. Un-rotate the point to align with standard axis (rotate by -20deg)
-      // Convert degrees to radians
+      // Calculate the centers of the two eyes based on "Face" rotation
+      // The eyes are offset along the X axis, then that axis is rotated.
       const angleRad = (ROTATION_DEG * Math.PI) / 180;
-      const cos = Math.cos(-angleRad);
-      const sin = Math.sin(-angleRad);
+      const cos = Math.cos(angleRad);
+      const sin = Math.sin(angleRad);
 
-      const unrotatedX = rawX * cos - rawY * sin;
-      const unrotatedY = rawX * sin + rawY * cos;
+      // Left Eye Center (Offset is -EYE_OFFSET)
+      const leftCenterX = screenCenterX + (-EYE_OFFSET * cos);
+      const leftCenterY = screenCenterY + (-EYE_OFFSET * sin);
 
-      // 3. Check ellipse constraint: (x/a)^2 + (y/b)^2 <= 1
-      // If result > 1, the point is outside, so we scale it back to the boundary.
-      const equation = (unrotatedX * unrotatedX) / (RADIUS_X * RADIUS_X) + 
-                       (unrotatedY * unrotatedY) / (RADIUS_Y * RADIUS_Y);
+      // Right Eye Center (Offset is +EYE_OFFSET)
+      const rightCenterX = screenCenterX + (EYE_OFFSET * cos);
+      const rightCenterY = screenCenterY + (EYE_OFFSET * sin);
 
-      let finalLocalX = unrotatedX;
-      let finalLocalY = unrotatedY;
+      // Get raw mouse relative to container top-left (for visual tracker)
+      const relativeMouseX = e.clientX - rect.left;
+      const relativeMouseY = e.clientY - rect.top;
 
-      if (equation > 1) {
-        const scale = 1 / Math.sqrt(equation);
-        finalLocalX = unrotatedX * scale;
-        finalLocalY = unrotatedY * scale;
-      }
+      // Calculate Constraints
+      const leftPos = getConstrainedPoint(
+        relativeMouseX, relativeMouseY, 
+        leftCenterX, leftCenterY, 
+        EYE_RADIUS_X, EYE_RADIUS_Y, 
+        ROTATION_DEG
+      );
 
-      // 4. Rotate back to original coordinate system (+20deg)
-      const cosBack = Math.cos(angleRad);
-      const sinBack = Math.sin(angleRad);
+      const rightPos = getConstrainedPoint(
+        relativeMouseX, relativeMouseY, 
+        rightCenterX, rightCenterY, 
+        EYE_RADIUS_X, EYE_RADIUS_Y, 
+        ROTATION_DEG
+      );
 
-      const rotatedX = finalLocalX * cosBack - finalLocalY * sinBack;
-      const rotatedY = finalLocalX * sinBack + finalLocalY * cosBack;
-
-      // 5. Update state (adding center offset back)
       setMousePos({ x: e.clientX, y: e.clientY });
-      setConstrainedPos({ 
-        x: centerX + rotatedX, 
-        y: centerY + rotatedY 
-      });
+      setLeftEyePos(leftPos);
+      setRightEyePos(rightPos);
     };
 
     window.addEventListener('mousemove', handleMouseMove);
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, []);
 
+  // Calculate eye center positions for rendering the static boundaries
+  // We do this just for the CSS positioning of the "sockets"
+  const getEyeStyle = (direction) => {
+    const dir = direction === 'left' ? -1 : 1;
+    return {
+      width: EYE_RADIUS_X * 2,
+      height: EYE_RADIUS_Y * 2,
+      // We use margin to offset from absolute center, then rotate the whole container
+      marginLeft: dir * EYE_OFFSET * 2 // simplistic positioning relative to center container
+    };
+  };
+
   return (
     <div 
       ref={containerRef}
       className="w-full h-screen bg-slate-900 overflow-hidden relative cursor-crosshair flex items-center justify-center"
     >
-      {/* UI Info */}
-    
+      <div className="absolute top-4 left-4 text-slate-400 font-mono text-sm pointer-events-none z-10">
+        <p>Rotated Face Experiment</p>
+        <p>Rotation: {ROTATION_DEG}°</p>
+      </div>
 
-      {/* Visual Guide: The Ellipse Boundary */}
+      {/* The "Face" Container - Rotated */}
       <div 
-        className="absolute border-2 border-dashed border-slate-600 rounded-[50%]"
-        style={{
-          width: RADIUS_X * 2,
-          height: RADIUS_Y * 2,
-          transform: `rotate(${ROTATION_DEG}deg)`,
-          pointerEvents: 'none'
-        }}
-      />
-
-      {/* Connection Line (Visualization only) */}
-      <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-20">
-        <line 
-          x1={mousePos.x} 
-          y1={mousePos.y} 
-          x2={constrainedPos.x} 
-          y2={constrainedPos.y} 
-          stroke="white" 
-          strokeWidth="1" 
-          strokeDasharray="4"
+        className="relative flex items-center justify-center"
+        style={{ transform: `rotate(${ROTATION_DEG}deg)` }}
+      >
+        {/* Left Eye Boundary */}
+        <div 
+          className="border-2 border-dashed border-slate-600 rounded-[50%]"
+          style={{
+            width: EYE_RADIUS_X * 2,
+            height: EYE_RADIUS_Y * 2,
+            marginRight: EYE_OFFSET/2, // Visual spacing
+            marginLeft: -EYE_OFFSET/2
+          }}
         />
-      </svg>
+        
+        {/* Right Eye Boundary */}
+        <div 
+          className="border-2 border-dashed border-slate-600 rounded-[50%]"
+          style={{
+            width: EYE_RADIUS_X * 2,
+            height: EYE_RADIUS_Y * 2,
+            marginLeft: EYE_OFFSET/2, // Visual spacing
+            marginRight: -EYE_OFFSET/2
+          }}
+        />
+      </div>
 
-      {/* The Constrained Element (Follower) */}
+      {/* Left Pupil (Absolute positioned based on calculated logic) */}
       <div
-        className="absolute w-8 h-8 bg-blue-500 rounded-full shadow-[0_0_15px_rgba(59,130,246,0.8)] border-2 border-white pointer-events-none transition-transform duration-75 ease-linear"
+        className="absolute w-6 h-6 bg-blue-400 rounded-full shadow-[0_0_10px_rgba(96,165,250,0.8)] pointer-events-none transition-transform duration-75 ease-linear"
         style={{
           left: 0,
           top: 0,
-          transform: `translate(${constrainedPos.x - 16}px, ${constrainedPos.y - 16}px)`
+          transform: `translate(${leftEyePos.x - 12}px, ${leftEyePos.y - 12}px)`
+        }}
+      />
+
+      {/* Right Pupil (Absolute positioned based on calculated logic) */}
+      <div
+        className="absolute w-6 h-6 bg-blue-400 rounded-full shadow-[0_0_10px_rgba(96,165,250,0.8)] pointer-events-none transition-transform duration-75 ease-linear"
+        style={{
+          left: 0,
+          top: 0,
+          transform: `translate(${rightEyePos.x - 12}px, ${rightEyePos.y - 12}px)`
         }}
       />
 
       {/* The Mouse Cursor (Visual Tracker) */}
-
+      <div
+        className="absolute w-3 h-3 bg-red-500 rounded-full pointer-events-none opacity-50 mix-blend-screen z-50"
+        style={{
+          left: 0,
+          top: 0,
+          transform: `translate(${mousePos.x - 6}px, ${mousePos.y - 6}px)`
+        }}
+      />
+      
+      {/* Visual Lines */}
+      <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-10">
+        <line x1={leftEyePos.x} y1={leftEyePos.y} x2={mousePos.x} y2={mousePos.y} stroke="white" strokeDasharray="4"/>
+        <line x1={rightEyePos.x} y1={rightEyePos.y} x2={mousePos.x} y2={mousePos.y} stroke="white" strokeDasharray="4"/>
+      </svg>
     </div>
   );
 };
